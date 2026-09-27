@@ -785,6 +785,27 @@ window.addEventListener(
   { passive: false }
 );
 
+// Телефон: ведёшь пальцем вверх — цветок растёт, вниз — «откатывается», как при прокрутке страницы.
+// Полный рост — примерно полторы высоты экрана пальцем.
+let touchY = null;
+window.addEventListener('touchstart', (event) => {
+  touchY = event.touches[0].clientY;
+}, { passive: true });
+window.addEventListener(
+  'touchmove',
+  (event) => {
+    if (touchY === null) return;
+    event.preventDefault();
+    const y = event.touches[0].clientY;
+    growTarget = Math.min(1, Math.max(0, growTarget + (touchY - y) / (1.5 * window.innerHeight)));
+    touchY = y;
+  },
+  { passive: false }
+);
+window.addEventListener('touchend', () => {
+  touchY = null;
+});
+
 // Плавный скролл: текущая стадия мягко «доезжает» до цели (чем меньше GROW_EASE, тем плавнее и дольше)
 const GROW_EASE = 2.2;
 function updateGrowth(dt) {
@@ -826,6 +847,8 @@ const poster = document.querySelector('.poster');
 const hover = { x: 0, y: 0 }; // положение мыши: -1…1 по каждой оси
 const tilt = { x: 0, y: 0 };
 window.addEventListener('pointermove', (event) => {
+  // Палец растит цветок, а поворот и наклон — только от мыши
+  if (event.pointerType === 'touch') return;
   hover.x = (event.clientX / window.innerWidth) * 2 - 1;
   hover.y = (event.clientY / window.innerHeight) * 2 - 1;
 });

@@ -15,6 +15,9 @@ body {
   justify-content: center;
   margin: 0;
   overflow: hidden;
+  /* На телефоне палец растит цветок: браузер не прокручивает и не обновляет страницу жестом */
+  touch-action: none;
+  overscroll-behavior: none;
   /* Нейтральный чёрный вокруг плаката на широких экранах */
   background: #0b0b0b;
   /* Перспектива для 3D-наклона плаката по наведению */
