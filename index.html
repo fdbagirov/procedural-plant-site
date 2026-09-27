@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Procedural Plant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600&family=Pinyon+Script&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Постер: 3D-сцена на весь экран, тексты лежат поверх -->
+  <main class="poster">
+    <canvas id="scene" aria-label="Суккулент на длинном пушистом стебле"></canvas>
+
+    <!-- Рамка из четырёх тонких линий: цветок стоит внутри неё -->
+    <svg class="frame" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="6.59" y1="0" x2="6.59" y2="100" />
+      <line x1="92.89" y1="0" x2="92.89" y2="100" />
+      <line x1="0" y1="9.55" x2="100" y2="9.55" />
+      <line x1="0" y1="90.45" x2="100" y2="90.45" />
+    </svg>
+
+    <!-- Название: векторная «S» с завитком + «pinosa» и «nostics» -->
+    <h1 class="title" aria-label="Spinosa nostics">
+      <img class="title-s" src="img/title-s.svg" width="103" height="155" alt="">
+      <span class="title-line title-line-1" aria-hidden="true">pinosa</span>
+      <span class="title-line title-line-2" aria-hidden="true">nostics</span>
+    </h1>
+
+    <p class="spinosa">SPINOSA</p>
+
+    <p class="side side-family">Family:<br>Asphodelaceae</p>
+    <p class="side side-blooms">Blooms:<br>Once a century</p>
+    <p class="side side-habitat">Habitat:<br>Unknown</p>
+
+    <p class="plate">PL.07</p>
+
+    <!-- Текстура печатного плаката поверх всего: зерно бумаги и лёгкая неровность тона -->
+    <div class="texture" aria-hidden="true"></div>
+  </main>
+  <script type="module" src="script.js"></script>
+</body>
+</html>

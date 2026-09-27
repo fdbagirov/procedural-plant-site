@@ -1,0 +1,177 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  overflow: hidden;
+  /* Нейтральный чёрный вокруг плаката на широких экранах */
+  background: #0b0b0b;
+  /* Перспектива для 3D-наклона плаката по наведению */
+  perspective: 1600px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+#scene {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- Постер: сцена на весь экран, тексты поверх ---------- */
+/* Раскладка перенесена из Figma (фрейм «main», 956 × 1320): размеры в cqh — доля высоты плаката (1cqh = 13.2px макета),
+   горизонтальные линии и отступы — в cqw, доле ширины плаката. Шрифты макета (Suisse Intl, Edwardian Script ITC) берутся
+   из установленных в системе; если их нет — похожие бесплатные из Google Fonts. */
+
+:root {
+  --ink: #f3eee6;
+  --font-grotesk: "Suisse Intl", "Inter Tight", system-ui, sans-serif;
+  --font-script: "Edwardian Script ITC", "Pinyon Script", cursive;
+  --poster-ratio: 0.65; /* ширина : высота плаката */
+}
+
+/* Плакат с фиксированными пропорциями: максимально большой, целиком влезает в окно, по центру */
+.poster {
+  --line-left: 6.59cqw;
+  position: relative;
+  flex: none;
+  height: min(100vh, 100vw / var(--poster-ratio));
+  aspect-ratio: var(--poster-ratio);
+  overflow: hidden;
+  container-type: size;
+  background: #000;
+  color: var(--ink);
+}
+
+/* Тексты не мешают колесу мыши и не выделяются случайно */
+.poster > :not(canvas) {
+  position: absolute;
+  margin: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Рамка: тонкие линии поверх сцены */
+.frame {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.frame line {
+  stroke: var(--ink);
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+  /* Толщина в пикселях экрана, как бы ни растягивалась рамка */
+  vector-effect: non-scaling-stroke;
+}
+
+/* Название: «S» — вектор из макета, строки — Suisse Intl Medium */
+.title {
+  top: 1.2cqh;
+  left: calc(var(--line-left) - 0.76cqh);
+  width: 40cqh;
+  height: 16cqh;
+  font-weight: 400;
+}
+
+.title-s {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 7.8cqh;
+  height: 11.74cqh;
+}
+
+.title-line {
+  position: absolute;
+  font-family: var(--font-grotesk);
+  font-weight: 500;
+  font-size: 8.67cqh;
+  line-height: normal;
+  letter-spacing: -0.07em;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.title-line-1 {
+  top: 0;
+  left: 7.35cqh;
+}
+
+.title-line-2 {
+  top: 6.74cqh;
+  left: 0.15cqh;
+}
+
+/* SPINOSA — огромными буквами вертикально по правому краю, выходит за края; читается снизу вверх */
+.spinosa {
+  top: 48.8%;
+  right: -4.85cqh;
+  writing-mode: vertical-rl;
+  transform: translateY(-50%) rotate(180deg);
+  font-family: var(--font-grotesk);
+  font-weight: 400;
+  font-size: 25.07cqh;
+  line-height: 0.8;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+/* Подписи слева: вертикальные, прижаты к левой линии рамки; положение задаётся нижним краем */
+.side {
+  left: calc(var(--line-left) - 2.1em);
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-family: var(--font-grotesk);
+  font-weight: 600;
+  font-size: clamp(12px, 1.36cqh, 18px);
+  line-height: 1.05;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.side-family {
+  bottom: 65.15cqh;
+}
+
+.side-blooms {
+  bottom: 44.7cqh;
+}
+
+.side-habitat {
+  bottom: 24.24cqh;
+}
+
+/* PL.07 — каллиграфией внизу слева */
+.plate {
+  top: 88.8cqh;
+  left: calc(var(--line-left) - 2.87cqh);
+  font-family: var(--font-script);
+  font-size: 11cqh;
+  line-height: normal;
+  white-space: nowrap;
+}
+
+/* Текстура печатного плаката: мелкое зерно бумаги (soft-light) + крупная неровность тона (multiply).
+   Лежит поверх всего, включая тексты, и не мешает мыши. */
+.texture {
+  inset: 0;
+  z-index: 1;
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='600'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23m)'/></svg>");
+  background-size: 300px 300px, 600px 600px;
+  mix-blend-mode: soft-light;
+  opacity: 0.55;
+}
