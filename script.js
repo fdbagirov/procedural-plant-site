@@ -7,6 +7,11 @@ import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 
+// Сначала браузер показывает тексты и рамку, а тяжёлую 3D-сцену строим уже после первой отрисовки
+await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
+// Короткая передышка между тяжёлыми шагами построения, чтобы страница не «замирала» надолго
+const pause = () => new Promise((resolve) => setTimeout(resolve));
+
 // ---------- Общее ----------
 
 // Предсказуемый «случайный» генератор: растение каждый раз одинаковое
@@ -64,12 +69,12 @@ function oklch(L, C, h) {
   return new THREE.Color().setRGB(...rgb.map((v) => Math.min(1, Math.max(0, v))), THREE.LinearSRGBColorSpace);
 }
 
-function lerpOklab(c1, c2, t) {
-  const a = linearToOklab(c1);
-  const b = linearToOklab(c2);
-  const rgb = oklabToLinear(lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t));
-  return new THREE.Color().setRGB(...rgb.map((v) => Math.min(1, Math.max(0, v))), THREE.LinearSRGBColorSpace);
-}
+// Цвета для смешивания храним сразу в OKLab (массив [L, a, b]) и переводим в экранные один раз, в самом конце:
+// так десятки тысяч вершин листьев раскрашиваются без лишних пересчётов туда-обратно
+const lab = (color) => linearToOklab(color);
+const mixLab = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const labToLinear = (c) => oklabToLinear(c[0], c[1], c[2]).map((v) => Math.min(1, Math.max(0, v)));
+const labToColor = (c) => new THREE.Color().setRGB(...labToLinear(c), THREE.LinearSRGBColorSpace);
 
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -130,7 +135,7 @@ scene.add(rim, rim2, fill);
 scene.add(new THREE.HemisphereLight('#3a1a14', '#0a0000', 0.15));
 
 // ---------- Фон ----------
-// Стена — бордовый бархат (img/velvet.jpg) с картой нормалей (img/velvet-normal.jpg, посчитана из яркости картинки):
+// Стена — бордовый бархат (img/velvet.webp) с картой нормалей (img/velvet-normal.webp, посчитана из яркости картинки):
 // свет честно ложится на ворс. Цвет стены ровный бордовый, а пятна бархата оставлены лишь как лёгкая
 // игра светлее/темнее (WALL_DETAIL) — узор почти незаметный. Картинка не бесшовная — повтор зеркальный.
 
@@ -157,8 +162,8 @@ function wallTexture(path, isColor) {
 }
 
 const wallMaterial = new THREE.MeshStandardMaterial({
-  map: wallTexture('img/velvet.jpg', true),
-  normalMap: wallTexture('img/velvet-normal.jpg', false),
+  map: wallTexture('img/velvet.webp', true),
+  normalMap: wallTexture('img/velvet-normal.webp', false),
   normalScale: new THREE.Vector2(0.8, 0.8),
   roughness: 0.95,
 });
@@ -286,6 +291,8 @@ stemGeo.setAttribute('aSurf', new THREE.Float32BufferAttribute(stemSurf, 3));
 let stemFrames = null;
 const stemP = new THREE.Vector3();
 const stemN = new THREE.Vector3();
+// Точки оси стебля на каждом сегменте: волоски берут своё место отсюда, а не ищут его на кривой заново
+const stemPts = new Float32Array((STEM_SEG + 1) * 3);
 
 // Пересчитывает трубку стебля по текущей кривой (в «покое», без покачивания)
 function buildStemMesh() {
@@ -293,6 +300,7 @@ function buildStemMesh() {
   for (let i = 0; i <= STEM_SEG; i++) {
     const t = i / STEM_SEG;
     stemCurve.getPointAt(t, stemP);
+    stemP.toArray(stemPts, i * 3);
     const r = stemRadius(t) * stemThickness;
     for (let j = 0; j <= STEM_RAD; j++) {
       const a = (j / STEM_RAD) * Math.PI * 2;
@@ -314,9 +322,9 @@ buildStemMesh();
 
 // Цвет стебля: внизу темнее и зеленее, у розетки светлее
 const stemColors = [];
-const cStemLow = oklch(0.52, 0.14, 136);
-const cStemHigh = oklch(0.66, 0.15, 126);
-const stemColorAt = (t) => lerpOklab(cStemLow, cStemHigh, smooth(0.1, 0.95, t));
+const cStemLow = lab(oklch(0.52, 0.14, 136));
+const cStemHigh = lab(oklch(0.66, 0.15, 126));
+const stemColorAt = (t) => labToColor(mixLab(cStemLow, cStemHigh, smooth(0.1, 0.95, t)));
 for (const t of stemT) {
   const c = stemColorAt(t);
   stemColors.push(c.r, c.g, c.b);
@@ -422,7 +430,16 @@ function buildStemHairs(withColors = false) {
   stemHairSpots.forEach((h, k) => {
     const i = Math.round(h.t * STEM_SEG);
     stemN.copy(stemFrames.normals[i]).multiplyScalar(Math.cos(h.a)).addScaledVector(stemFrames.binormals[i], Math.sin(h.a));
-    stemCurve.getPointAt(h.t, stemP).addScaledVector(stemN, stemRadius(h.t) * stemThickness * 0.95);
+    // Точка оси между двумя соседними сегментами
+    const fi = h.t * STEM_SEG;
+    const i0 = Math.min(STEM_SEG - 1, Math.floor(fi));
+    const f = fi - i0;
+    const p0 = i0 * 3;
+    stemP.set(
+      lerp(stemPts[p0], stemPts[p0 + 3], f),
+      lerp(stemPts[p0 + 1], stemPts[p0 + 4], f),
+      lerp(stemPts[p0 + 2], stemPts[p0 + 5], f)
+    ).addScaledVector(stemN, stemRadius(h.t) * stemThickness * 0.95);
     stemHairDir.copy(stemN).addScaledVector(stemFrames.tangents[i], h.lean).addScaledVector(h.jitter, 0.35).normalize();
     const off = k * 6;
     stemHairRest[off] = stemP.x;
@@ -441,6 +458,7 @@ stemHairGeo.setAttribute('position', new THREE.BufferAttribute(stemHairRest.slic
 stemHairGeo.setAttribute('color', new THREE.Float32BufferAttribute(stemHairCol, 3));
 const stemHairs = new THREE.LineSegments(stemHairGeo, hairMaterial);
 stemHairs.frustumCulled = false;
+await pause();
 
 // ---------- Листья ----------
 
@@ -463,25 +481,26 @@ for (let i = 0; i <= LEAF_SEG; i++) {
 
 // Палитра (OKLCH): взрослый лист — в основном глубокий бордовый; зелёный — ближе к кончику,
 // а у части листьев и в середине; на самом кончике — капля приглушённого жёлтого
+// Палитра хранится в OKLab (см. mixLab)
 const PAL = {
-  burgundy: oklch(0.29, 0.14, 12),
-  burgundyDeep: oklch(0.19, 0.09, 12),
-  green: oklch(0.54, 0.14, 140),
-  greenInner: oklch(0.62, 0.15, 134),
-  tip: oklch(0.78, 0.12, 100),
+  burgundy: lab(oklch(0.29, 0.14, 12)),
+  burgundyDeep: lab(oklch(0.19, 0.09, 12)),
+  green: lab(oklch(0.54, 0.14, 140)),
+  greenInner: lab(oklch(0.62, 0.15, 134)),
+  tip: lab(oklch(0.78, 0.12, 100)),
 };
 
-// Цвет точки листа: t — от основания к кончику, u/v — положение на сечении (v > 0 — верх)
+// Цвет точки листа (в OKLab): t — от основания к кончику, u/v — положение на сечении (v > 0 — верх)
 function leafColor(o, t, u, v) {
   // Откуда начинается зелень: у «зелёных посередине» листьев — раньше
   const from = o.greenMid ? 0.55 : 0.74;
   const top = smooth(-0.6, 0.2, v);
   const greenAmt = smooth(from, from + 0.3, t) * lerp(0.5, 1, top);
-  let c = lerpOklab(PAL.burgundy, PAL.burgundyDeep, (1 - top) * 0.7 + (1 - smooth(0, 0.25, t)) * 0.3);
-  c = lerpOklab(c, lerpOklab(PAL.green, PAL.greenInner, o.inner), greenAmt);
+  let c = mixLab(PAL.burgundy, PAL.burgundyDeep, (1 - top) * 0.7 + (1 - smooth(0, 0.25, t)) * 0.3);
+  c = mixLab(c, mixLab(PAL.green, PAL.greenInner, o.inner), greenAmt);
   // Края листа — бордовые почти до кончика
-  c = lerpOklab(c, PAL.burgundy, Math.pow(Math.abs(u), 10) * 0.7 * (1 - smooth(0.75, 1, t)));
-  c = lerpOklab(c, PAL.tip, smooth(0.85, 0.99, t) * 0.8);
+  c = mixLab(c, PAL.burgundy, Math.pow(Math.abs(u), 10) * 0.7 * (1 - smooth(0.75, 1, t)));
+  c = mixLab(c, PAL.tip, smooth(0.85, 0.99, t) * 0.8);
   return c;
 }
 
@@ -534,14 +553,16 @@ const leafColYoung = new Float32Array(LEAF_COUNT * LEAF_VERTS * 3);
 const leafSurf = new Float32Array(LEAF_COUNT * LEAF_VERTS * 3);
 // Молодой лист — свежий зелёный с лёгким бордовым у основания; взрослея, он «наливается» бордовым
 function youngLeafColor(o, t, u, v) {
-  let c = lerpOklab(PAL.green, PAL.greenInner, 0.4 + 0.6 * o.inner);
-  c = lerpOklab(c, PAL.burgundy, (1 - smooth(0, 0.2, t)) * 0.45 + (1 - smooth(-0.6, 0.2, v)) * 0.2);
-  c = lerpOklab(c, PAL.tip, smooth(0.85, 0.99, t) * 0.8);
+  let c = mixLab(PAL.green, PAL.greenInner, 0.4 + 0.6 * o.inner);
+  c = mixLab(c, PAL.burgundy, (1 - smooth(0, 0.2, t)) * 0.45 + (1 - smooth(-0.6, 0.2, v)) * 0.2);
+  c = mixLab(c, PAL.tip, smooth(0.85, 0.99, t) * 0.8);
   return c;
 }
 const leafIdx = [];
 const leafHairSpots = [];
-leafList.forEach((o, n) => {
+for (const [n, o] of leafList.entries()) {
+  // Листья раскрашиваем порциями по 16 штук
+  if (n > 0 && n % 16 === 0) await pause();
   const base = n * LEAF_VERTS;
   for (let i = 0; i <= LEAF_SEG; i++) {
     const t = i / LEAF_SEG;
@@ -549,17 +570,17 @@ leafList.forEach((o, n) => {
       const a = (j / LEAF_RAD) * Math.PI * 2;
       const u = Math.cos(a);
       const v = Math.sin(a);
-      const c = leafColor(o, t, u, v);
-      const y = youngLeafColor(o, t, u, v);
+      const c = labToLinear(leafColor(o, t, u, v));
+      const y = labToLinear(youngLeafColor(o, t, u, v));
       // Затенение у основания: там листья перекрывают друг друга и свет почти не доходит
       const shade = o.shade * lerp(0.3, 1, smooth(0, 0.45, t)) * (v < 0 ? 0.8 : 1);
       const idx = (base + i * (LEAF_RAD + 1) + j) * 3;
-      leafColAdult[idx] = c.r * shade;
-      leafColAdult[idx + 1] = c.g * shade;
-      leafColAdult[idx + 2] = c.b * shade;
-      leafColYoung[idx] = y.r * shade;
-      leafColYoung[idx + 1] = y.g * shade;
-      leafColYoung[idx + 2] = y.b * shade;
+      leafColAdult[idx] = c[0] * shade;
+      leafColAdult[idx + 1] = c[1] * shade;
+      leafColAdult[idx + 2] = c[2] * shade;
+      leafColYoung[idx] = y[0] * shade;
+      leafColYoung[idx + 1] = y[1] * shade;
+      leafColYoung[idx + 2] = y[2] * shade;
       leafSurf[idx] = t * o.len * 10;
       leafSurf[idx + 1] = u * 6;
       leafSurf[idx + 2] = v * 6 + n * 3.7;
@@ -583,10 +604,11 @@ leafList.forEach((o, n) => {
       v: Math.sin(a),
       len: range(0.012, 0.03),
       jitter: randomUnit(),
-      color: leafColor(o, i / LEAF_SEG, Math.cos(a), Math.sin(a)),
+      color: labToColor(leafColor(o, i / LEAF_SEG, Math.cos(a), Math.sin(a))),
     });
   }
-});
+}
+await pause();
 
 const leafHairPos = new Float32Array(leafHairSpots.length * 6);
 const leafHairCol = new Float32Array(leafHairSpots.length * 6);
@@ -710,6 +732,7 @@ leafHairGeo.setAttribute('color', new THREE.BufferAttribute(leafHairCol, 3));
 
 // Цвет волосков считаем один раз — на полной розетке, где свет падает как на референсе
 updateLeaves(1, true);
+await pause();
 
 function applyGrowth(p) {
   shapeStem(p);
@@ -924,8 +947,16 @@ window.addEventListener('resize', () => {
   frameCamera();
 });
 
+// Шейдеры собираются заранее и, где браузер умеет, параллельно — первый кадр не подвешивает страницу
+try {
+  await renderer.compileAsync(scene, camera);
+} catch {
+  // Не получилось — шейдеры соберутся при первой отрисовке, как обычно
+}
+
 const clock = new THREE.Clock();
 let lastTime = 0;
+let shown = false;
 renderer.setAnimationLoop(() => {
   const time = clock.getElapsedTime();
   // Шаг не больше 1/30 с: если вкладка «проснулась» после паузы, пружина не улетит
@@ -936,4 +967,8 @@ renderer.setAnimationLoop(() => {
   stepHover(dt);
   sway(time);
   composer.render();
+  if (!shown) {
+    shown = true;
+    canvas.classList.add('is-ready');
+  }
 });
