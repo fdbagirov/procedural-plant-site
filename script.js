@@ -77,8 +77,11 @@ const labToLinear = (c) => oklabToLinear(c[0], c[1], c[2]).map((v) => Math.min(1
 const labToColor = (c) => new THREE.Color().setRGB(...labToLinear(c), THREE.LinearSRGBColorSpace);
 
 const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Телефоны и планшеты: сцена рисуется чуть проще (разрешение, тени, свечение), чтобы видеокарта не захлёбывалась
+const LITE = window.matchMedia('(pointer: coarse)').matches;
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LITE });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, LITE ? 1.5 : 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
@@ -103,7 +106,7 @@ const key = new THREE.SpotLight('#fff0dc', 620, 12, 0.32, 0.6, 2);
 key.position.copy(KEY_POS);
 key.target.position.set(0, 3.4, 0);
 key.castShadow = true;
-key.shadow.mapSize.set(2048, 2048);
+key.shadow.mapSize.setScalar(LITE ? 1024 : 2048);
 key.shadow.bias = -0.0004;
 key.shadow.normalBias = 0.015;
 // Тень от верхнего света только на самом растении, до фона она не долетает
@@ -122,7 +125,7 @@ backLight.castShadow = true;
 backLight.shadow.mapSize.set(512, 512);
 backLight.shadow.bias = -0.0005;
 backLight.shadow.radius = 26;
-backLight.shadow.blurSamples = 25;
+backLight.shadow.blurSamples = LITE ? 12 : 25;
 scene.add(backLight, backLight.target);
 
 const rim = new THREE.DirectionalLight('#ffe6c4', 2.6);
@@ -294,6 +297,46 @@ const stemN = new THREE.Vector3();
 // Точки оси стебля на каждом сегменте: волоски берут своё место отсюда, а не ищут его на кривой заново
 const stemPts = new Float32Array((STEM_SEG + 1) * 3);
 
+// Нормали для света: в каждой вершине — сумма нормалей соседних треугольников, как в computeVertexNormals
+// из three.js, но прямо в массивах чисел, без временных векторов — при росте это в разы быстрее
+function computeNormals(geo) {
+  const pos = geo.attributes.position.array;
+  const index = geo.index.array;
+  if (!geo.attributes.normal) geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(pos.length), 3));
+  const nor = geo.attributes.normal.array;
+  nor.fill(0);
+  for (let t = 0; t < index.length; t += 3) {
+    const a = index[t] * 3;
+    const b = index[t + 1] * 3;
+    const c = index[t + 2] * 3;
+    // (C − B) × (A − B)
+    const cbx = pos[c] - pos[b], cby = pos[c + 1] - pos[b + 1], cbz = pos[c + 2] - pos[b + 2];
+    const abx = pos[a] - pos[b], aby = pos[a + 1] - pos[b + 1], abz = pos[a + 2] - pos[b + 2];
+    const nx = cby * abz - cbz * aby;
+    const ny = cbz * abx - cbx * abz;
+    const nz = cbx * aby - cby * abx;
+    nor[a] += nx; nor[a + 1] += ny; nor[a + 2] += nz;
+    nor[b] += nx; nor[b + 1] += ny; nor[b + 2] += nz;
+    nor[c] += nx; nor[c + 1] += ny; nor[c + 2] += nz;
+  }
+  for (let i = 0; i < nor.length; i += 3) {
+    const len = Math.sqrt(nor[i] * nor[i] + nor[i + 1] * nor[i + 1] + nor[i + 2] * nor[i + 2]) || 1;
+    nor[i] /= len;
+    nor[i + 1] /= len;
+    nor[i + 2] /= len;
+  }
+  geo.attributes.normal.needsUpdate = true;
+}
+
+// Точки сечения стебля по кругу (cos/sin) — считаем один раз
+const STEM_RING_C = new Float64Array(STEM_RAD + 1);
+const STEM_RING_S = new Float64Array(STEM_RAD + 1);
+for (let j = 0; j <= STEM_RAD; j++) {
+  const a = (j / STEM_RAD) * Math.PI * 2;
+  STEM_RING_C[j] = Math.cos(a);
+  STEM_RING_S[j] = Math.sin(a);
+}
+
 // Пересчитывает трубку стебля по текущей кривой (в «покое», без покачивания)
 function buildStemMesh() {
   stemFrames = stemCurve.computeFrenetFrames(STEM_SEG, false);
@@ -302,17 +345,19 @@ function buildStemMesh() {
     stemCurve.getPointAt(t, stemP);
     stemP.toArray(stemPts, i * 3);
     const r = stemRadius(t) * stemThickness;
+    const n = stemFrames.normals[i];
+    const bn = stemFrames.binormals[i];
     for (let j = 0; j <= STEM_RAD; j++) {
-      const a = (j / STEM_RAD) * Math.PI * 2;
-      stemN.copy(stemFrames.normals[i]).multiplyScalar(Math.cos(a)).addScaledVector(stemFrames.binormals[i], Math.sin(a));
+      const c = STEM_RING_C[j];
+      const s = STEM_RING_S[j];
       const off = (i * (STEM_RAD + 1) + j) * 3;
-      stemRest[off] = stemP.x + stemN.x * r;
-      stemRest[off + 1] = stemP.y + stemN.y * r;
-      stemRest[off + 2] = stemP.z + stemN.z * r;
+      stemRest[off] = stemP.x + (n.x * c + bn.x * s) * r;
+      stemRest[off + 1] = stemP.y + (n.y * c + bn.y * s) * r;
+      stemRest[off + 2] = stemP.z + (n.z * c + bn.z * s) * r;
     }
   }
   stemGeo.attributes.position.array.set(stemRest);
-  stemGeo.computeVertexNormals();
+  computeNormals(stemGeo);
   stemCurve.getPointAt(1, STEM_TOP);
   stemCurve.getTangentAt(1, STEM_TOP_DIR);
 }
@@ -426,29 +471,54 @@ for (let k = 0; k < STEM_HAIRS; k++) {
 const stemHairRest = new Float32Array(STEM_HAIRS * 6);
 const stemHairDir = new THREE.Vector3();
 
+// Что у волоска не меняется при росте, считаем один раз: направление вокруг стебля,
+// толщину стебля в этом месте и между какими сегментами оси он сидит
+for (const h of stemHairSpots) {
+  h.ca = Math.cos(h.a);
+  h.sa = Math.sin(h.a);
+  h.r = stemRadius(h.t) * 0.95;
+  h.i = Math.round(h.t * STEM_SEG);
+  const fi = h.t * STEM_SEG;
+  h.i0 = Math.min(STEM_SEG - 1, Math.floor(fi));
+  h.f = fi - h.i0;
+}
+
 function buildStemHairs(withColors = false) {
   stemHairSpots.forEach((h, k) => {
-    const i = Math.round(h.t * STEM_SEG);
-    stemN.copy(stemFrames.normals[i]).multiplyScalar(Math.cos(h.a)).addScaledVector(stemFrames.binormals[i], Math.sin(h.a));
-    // Точка оси между двумя соседними сегментами
-    const fi = h.t * STEM_SEG;
-    const i0 = Math.min(STEM_SEG - 1, Math.floor(fi));
-    const f = fi - i0;
-    const p0 = i0 * 3;
-    stemP.set(
-      lerp(stemPts[p0], stemPts[p0 + 3], f),
-      lerp(stemPts[p0 + 1], stemPts[p0 + 4], f),
-      lerp(stemPts[p0 + 2], stemPts[p0 + 5], f)
-    ).addScaledVector(stemN, stemRadius(h.t) * stemThickness * 0.95);
-    stemHairDir.copy(stemN).addScaledVector(stemFrames.tangents[i], h.lean).addScaledVector(h.jitter, 0.35).normalize();
+    const n = stemFrames.normals[h.i];
+    const bn = stemFrames.binormals[h.i];
+    const tg = stemFrames.tangents[h.i];
+    // Направление от оси наружу
+    const nx = n.x * h.ca + bn.x * h.sa;
+    const ny = n.y * h.ca + bn.y * h.sa;
+    const nz = n.z * h.ca + bn.z * h.sa;
+    // Корень: точка оси между двумя соседними сегментами + радиус стебля
+    const p0 = h.i0 * 3;
+    const r = h.r * stemThickness;
+    const px = lerp(stemPts[p0], stemPts[p0 + 3], h.f) + nx * r;
+    const py = lerp(stemPts[p0 + 1], stemPts[p0 + 4], h.f) + ny * r;
+    const pz = lerp(stemPts[p0 + 2], stemPts[p0 + 5], h.f) + nz * r;
+    // Волосок наклонён вдоль стебля и чуть в случайную сторону
+    let dx = nx + tg.x * h.lean + h.jitter.x * 0.35;
+    let dy = ny + tg.y * h.lean + h.jitter.y * 0.35;
+    let dz = nz + tg.z * h.lean + h.jitter.z * 0.35;
+    const dl = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    dx /= dl;
+    dy /= dl;
+    dz /= dl;
     const off = k * 6;
-    stemHairRest[off] = stemP.x;
-    stemHairRest[off + 1] = stemP.y;
-    stemHairRest[off + 2] = stemP.z;
-    stemHairRest[off + 3] = stemP.x + stemHairDir.x * h.len;
-    stemHairRest[off + 4] = stemP.y + stemHairDir.y * h.len;
-    stemHairRest[off + 5] = stemP.z + stemHairDir.z * h.len;
-    if (withColors) pushHair([], stemHairCol, stemP, stemHairDir, h.len, stemN, stemColorAt(h.t));
+    stemHairRest[off] = px;
+    stemHairRest[off + 1] = py;
+    stemHairRest[off + 2] = pz;
+    stemHairRest[off + 3] = px + dx * h.len;
+    stemHairRest[off + 4] = py + dy * h.len;
+    stemHairRest[off + 5] = pz + dz * h.len;
+    if (withColors) {
+      stemN.set(nx, ny, nz);
+      stemP.set(px, py, pz);
+      stemHairDir.set(dx, dy, dz);
+      pushHair([], stemHairCol, stemP, stemHairDir, h.len, stemN, stemColorAt(h.t));
+    }
   });
 }
 buildStemHairs(true);
@@ -648,6 +718,15 @@ function surfInto(o, i, u, v, out, off) {
   out[off + 2] = -o.sin * lx + o.cos * lz;
 }
 
+// Точки сечения листа по кругу (cos/sin) — одинаковые для всех листьев, считаем один раз
+const RING_U = new Float64Array(LEAF_RAD + 1);
+const RING_V = new Float64Array(LEAF_RAD + 1);
+for (let j = 0; j <= LEAF_RAD; j++) {
+  const a = (j / LEAF_RAD) * Math.PI * 2;
+  RING_U[j] = Math.cos(a);
+  RING_V[j] = Math.sin(a);
+}
+
 const tmp = new Float32Array(9);
 const hairN = new THREE.Vector3();
 const hairDir = new THREE.Vector3();
@@ -677,16 +756,17 @@ function updateLeaves(p, withHairColors = false) {
   leafList.forEach((o, n) => {
     buildSpine(o);
     const base = n * LEAF_VERTS;
+    // Бордовый не смешивается с зелёным (иначе выходит бурый), а «растекается» по листу
+    // от основания к кончику: граница front движется по мере взросления листа
+    const front = (1 - o.youth) * 1.5 - 0.2;
     for (let i = 0; i <= LEAF_SEG; i++) {
+      const w = 1 - smooth(front - 0.25, front + 0.25, i / LEAF_SEG);
       for (let j = 0; j <= LEAF_RAD; j++) {
-        const a = (j / LEAF_RAD) * Math.PI * 2;
         const idx = (base + i * (LEAF_RAD + 1) + j) * 3;
-        surfInto(o, i, Math.cos(a), Math.sin(a), leafPos, idx);
-        // Бордовый не смешивается с зелёным (иначе выходит бурый), а «растекается» по листу
-        // от основания к кончику: граница front движется по мере взросления листа
-        const front = (1 - o.youth) * 1.5 - 0.2;
-        const w = 1 - smooth(front - 0.25, front + 0.25, i / LEAF_SEG);
-        for (let c = 0; c < 3; c++) leafCol[idx + c] = lerp(leafColYoung[idx + c], leafColAdult[idx + c], w);
+        surfInto(o, i, RING_U[j], RING_V[j], leafPos, idx);
+        leafCol[idx] = leafColYoung[idx] + (leafColAdult[idx] - leafColYoung[idx]) * w;
+        leafCol[idx + 1] = leafColYoung[idx + 1] + (leafColAdult[idx + 1] - leafColYoung[idx + 1]) * w;
+        leafCol[idx + 2] = leafColYoung[idx + 2] + (leafColAdult[idx + 2] - leafColYoung[idx + 2]) * w;
       }
     }
   });
@@ -741,7 +821,7 @@ function applyGrowth(p) {
   updateLeaves(p);
   leafGeo.attributes.position.needsUpdate = true;
   leafGeo.attributes.color.needsUpdate = true;
-  leafGeo.computeVertexNormals();
+  computeNormals(leafGeo);
   leafHairGeo.attributes.position.needsUpdate = true;
 }
 
@@ -904,12 +984,17 @@ function sway(time) {
 // Кадр рисуется в буфер со сглаживанием (samples), иначе тонкие волоски рябят
 const composer = new EffectComposer(
   renderer,
-  new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
+  new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: LITE ? 2 : 4 })
 );
 composer.addPass(new RenderPass(scene, camera));
 
 // Лёгкое свечение светлых мест: кайма пушка и кончики листьев слегка «горят»
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.25, 0.55, 0.75);
+// На телефоне свечение считаем в половинном разрешении: оно мягкое, разницы не видно
+if (LITE) {
+  const setBloomSize = bloomPass.setSize.bind(bloomPass);
+  bloomPass.setSize = (w, h) => setBloomSize(Math.round(w / 2), Math.round(h / 2));
+}
 composer.addPass(bloomPass);
 
 composer.addPass(new OutputPass());
